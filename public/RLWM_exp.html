@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <script src="RLWM_js/jspsych.js"></script>
+  <script src="RLWM_js/socket.io.js"></script>
+  <script src="RLWM_js/lodash.js"></script>
+  <script src="RLWM_js/plugin-preload.js"></script>
+  <script src="RLWM_js/plugin-RLWMlearning.js"></script>
+  <script src="RLWM_js/plugin-svg-fixation.js"></script>
+  <script src="RLWM_js/plugin-survey-likert.js"></script>
+  <script src="RLWM_js/plugin-fullscreen.js"></script>
+  <script src="RLWM_js/plugin-browser-check.js"></script>
+  <script src="RLWM_js/plugin-call-function.js"></script>
+  <script src="RLWM_js/plugin-fingertapping.js"></script>
+  <script src="RLWM_js/plugin-fingertapping-demo.js"></script>
+  <script src="RLWM_js/plugin-flex-instruction.js"></script>
+  <script src="RLWM_js/plugin-html-button-response-custom.js"></script>
+  <script src="RLWM_js/plugin-survey-html-form.js"></script>
+  <script src="RLWM_js/plugin-external-html-improved.js"></script>
+  <script src="RLWM_js/d3.js"></script>
+  <script src="RLWM_js/jquery-3.6.1.js"></script>
+  <link rel="stylesheet" href="./RLWM_css/jspsych.css">
+  <link rel="stylesheet" href="./RLWM_css/custom_styles.css">
+
+</head>
+
+<body>
+</body>
+
+<script>
+  ////////////////////////////////////////////////////////////////////
+  //////////////////////// WEBSOCKET CONNECTION //////////////////////
+  ////////////////////////////////////////////////////////////////////
+
+  var socket
+  redirect_base = 'http://localhost:3000/'
+  
+  connectsocket = function () {
+    fetch('getEnvironmentVars')
+      .then(response => response.json())
+      .then(data => {
+        var node_env = data.ENVIRONMENT;
+        console.log(node_env)
+        if (node_env == 'production') {
+          socket = io('yourdomaincomeshere');
+        } else {
+          socket = io('http://localhost:3000');
+          redirect_base = 'http://localhost:3000/'
+        }
+        socket.on("error", (error) => {
+          console.log('socket connection problem')
+        });
+        socket.on("connect", (e) => {
+          console.log('socket connected')
+        });
+      })
+  }
+
+  connectsocket()
+
+
+  //////////////////////////////////////////////////////
+  // Init jsPsych
+  //////////////////////////////////////////////////////
+
+  var jsPsych = initJsPsych({
+    on_finish: function () {
+      var interaction_data = jsPsych.data.getInteractionData();
+      interaction_data.trial_tag = 'interaction';
+      jsPsych.data.get().push(interaction_data);
+      socket.disconnect()
+      if (exclude_participant == true) {
+        document.body.innerHTML = '<div id="finalword" style="margin:auto; text-align: center; align-content: center;"><h2>' + lang.reject_message + '</h2></div>'
+      } else if (manual_mode == true) {
+        jsPsych.data.get().localSave('json', basename + '_' + Date() +
+          '.json');
+        window.location.href = "/";
+      } else {
+        $.ajax({
+          type: "POST",
+          url: "/RLWMpost",
+          data: jsPsych.data.get().json(),
+          contentType: "application/json"
+        })
+          .done(function () {
+            // WHERE END OF TASK PROCESS SHOULD BE CODED
+          })
+          .fail(function () {
+            jsPsych.data.get().localSave('csv', basename + '_' + Date() +
+              '.csv');
+            alert(
+              "A problem occurred while writing to the database. If a file named mydataEP.csv had been downloaded in your browser, please send it to the experimenter at: romain.ligneul@gmail.com"
+            )
+            window.location.href = "/";
+          })
+      }
+    }
+  });
+
+  var version_name = 'v1'
+  var exclude_participant = false;
+  var prolific_mode = false;
+  var manual_mode = false;
+  var jpnd_mode = false;
+  var redirect_url = redirect_base;
+  var basename = 'RLWM_direct'
+  var dbId = jsPsych.randomization.randomID()
+  var dbtype = 'other'
+
+  //////////////////////////////////////////////////////
+  // Process URL variable and determine use case
+  //////////////////////////////////////////////////////
+
+  const queryString = window.location.search;
+  const urlParams = new URLSearchParams(queryString);
+
+  // ALL THE URL PARAMETERS YOU CAN SPECIFY
+  var SUBJECTID = 'unknown'
+  if (urlParams.has('SUBJECTID')) {
+    SUBJECTID = urlParams.get('SUBJECTID');
+  }
+  var UNIQUEID = 'unknown'
+  if (urlParams.has('UNIQUEID')) {
+    UNIQUEID = urlParams.get('UNIQUEID');
+  }
+  var PROLIFIC_PID = 'unknown'
+  if (urlParams.has('PROLIFIC_PID')) {
+    PROLIFIC_PID = urlParams.get('PROLIFIC_PID');
+  }
+  var LANGUAGE = 'english'
+  if (urlParams.has('LANGUAGE')) {
+    LANGUAGE = urlParams.get('LANGUAGE');
+  }
+  var STUDY_ID = 'unknown'
+  if (urlParams.has('STUDY_ID')) {
+    STUDY_ID = urlParams.get('STUDY_ID');
+  }
+  var SESSION_ID = 'unknown'
+  if (urlParams.has('SESSION_ID')) {
+    SESSION_ID = urlParams.get('SESSION_ID');
+  }
+  var TASK_ID = 'default'
+  if (urlParams.has('TASK_ID')) {
+    TASK_ID = urlParams.get('TASK_ID');
+  }
+
+  basename = 'RLWM' + TASK_ID + '_' + UNIQUEID + '_' + STUDY_ID + '_' + SESSION_ID + '_' + LANGUAGE + '_' + version_name
+
+
+  jsPsych.data.addProperties({ basename: basename });
+
+  ////////////////////////////////////////////////////////////////////
+  ////////////////////// INITIALIZE VARIABLES  ///////////////////////
+  ////////////////////////////////////////////////////////////////////
+  var tnum = 0;
+  var tnum_instr = 0;
+  var tnum_attn = 0;
+  var show_choicemessage = false;
+  var progress_update = false;
+  var next_feedback = false;
+  var mobile_session = false;
+
+  // initialize progressbar infos
+  var progress_update = false;
+  var progress_value = 0;
+
+  var currentSVG
+  var instruction_skipdelay = 3000;
+  var cinfo;
+  var start_progress_width = 1.5;
+  var cummaxreward;
+  var sumCorrect = 0;
+  var doneFraction = 0;
+  var guessedAccuracy = 0.8;
+  var expectedAccuracy = 0.8;
+  var accumulatedAccuracy;
+
+
+  ////////////////////////////////////////////////////////////////////
+  //////////////////// DEFINITIONS AND SPECIFICATIONS ////////////////
+  ////////////////////////////////////////////////////////////////////
+
+  var expdef = [];
+  expdef.pathLearningTrial = './RLWM_assets/learningtrial.svg'
+  expdef.pathProgressbar = './RLWM_assets/progressbar_overall.svg';
+
+  expdef.keyMode = 'keyboard';
+  expdef.keyCodes = ['arrowleft', 'arrowdown', 'arrowright'];
+  expdef.logConsole = false;
+  expdef.test1_repeat = 3;
+
+  var stimdef = [];
+  stimdef.idMain = '#svgview';
+  stimdef.idRespBoxes = ['#leftresp', '#centerresp', '#rightresp']; // 
+  stimdef.idRespBoxesText = ["#lefttext", "#centertext", "#righttext"];
+  stimdef.idRespBoxesColor = ["#81aac2ff", "#c1c34aff", "#0fb76fff"];
+  stimdef.correct_feedbackColor = ["#c1c34aff", "#0fb76fff"]
+
+  stimdef.idRespBoxesOpacity = ['0.2', '0.6']; //
+  stimdef.idFeedback = ["#incorrect", "#correctNormal", "#correctExtra", "#noresponse"];
+  stimdef.textFeedback = ["Incorrect", "Correct", "Correct", "No valid response"];
+  stimdef.idProgress = "#progressbar"
+  stimdef.progressbar_stepDownUp = [0, 0]; // will be adaptively computed
+
+  stimdef.idTargetLearning = '#targetimage';
+  stimdef.pathImages = './RLWM_img/'
+  stimdef.setNames = ["bird", "construction equipment", "container", "electronic device", "fruit", "kitchen tool",
+    "lighting", "musical instrument", "sports equipment", "vegetable", "vehicle", "watercraft", "dessert"
+  ];
+  stimdef.setOrder = this.jsPsych.randomization.shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11
+  ]); // the last is not part of the randomization because it is used for training
+  stimdef.imageNames = [];
+  stimdef.imageNames[0] = ["eagle", "hummingbird", "owl", "peacock", "pigeon", "rooster"]
+  stimdef.imageNames[1] = ["crane", "hammer", "saw", "scaffold", "screwdriver", "steamroller"]
+  stimdef.imageNames[2] = ["barrel", "dumpster", "locker", "pitcher", "vial", "wineglass"]
+  stimdef.imageNames[3] = ["coffeemaker", "copier", "drill", "modem", "television", "washing_machine"]
+  stimdef.imageNames[4] = ["banana", "blueberry", "grapefruit", "kiwi", "pineapple", "raspberry"]
+  stimdef.imageNames[5] = ["knife", "measuring_cup", "rolling_pin", "scoop", "strainer", "whisk"]
+  stimdef.imageNames[6] = ["chandelier", "headlamp", "lamp", "lightbulb", "lighter", "streetlight"]
+  stimdef.imageNames[7] = ["clarinet", "guitar", "harmonica", "piano", "trumpet", "xylophone"]
+  stimdef.imageNames[8] = ["barbell", "baseball_glove", "basketball", "boxing_gloves", "goggles", "snowboard"]
+  stimdef.imageNames[9] = ["beet", "brussels_sprouts", "carrot", "eggplant", "lettuce", "pumpkin"]
+  stimdef.imageNames[10] = ["airplane", "bike", "dirt_bike", "firetruck", "garbage_truck", "taxi"]
+  stimdef.imageNames[11] = ["canoe", "jetski", "ship", "speedboat", "submarine", "tugboat"]
+  stimdef.imageNames[12] = ["brownie", "cake", "dessert", "donut", "ice-cream_cone", "milkshake"]
+
+
+  stimdef.keyboard_arrows = 'RLWM_assets/keyboard_arrows.png'
+
+
+  //
+  var timing = [];
+  timing.durFadeIn = 100;
+  timing.durProgressUpdate = 500;
+
+  // create trial-wise vectors
+  var main_info = [];
+  main_info.tread = 0;
+  main_info.tvec = [];
+  main_info.stimvec = [];
+  main_info.setvec = [];
+  main_info.setsize = [];
+  main_info.blockId = [];
+  main_info.lastBlockId;
+  main_info.blockId = [];
+  main_info.correctAction = [];
+  main_info.correctFeedback = [];
+  main_info.correctProbExtra = [];
+  main_info.maxReward = [];
+  var unique_info = [];
+  unique_info.stimvec = [];
+  unique_info.setvec = [];
+  unique_info.setsize = [];
+  unique_info.correctAction = [];
+  unique_info.correctProbExtra = [];
+  unique_info.correctProbFBresp = [];
+  unique_info.correctFeedback = [];
+  unique_info.tvec = [];
+  unique_info.uniqueID = [];
+  unique_info.blockId = [];
+
+  var randind = [];
+  var maxReward = 0;
+  var step_size;
+  var rem_tnum;
+  var cumreward = 0;
+  var preloadPaths = [];
+
+  function loadCSV() {
+    d3.csv("./RLWM_pst/V4/S_" + counterbalanced_version.toString() + "/train.csv", function (data) {
+      if (main_info.tread == 0) {
+        main_info.lastBlockId = parseInt(data["block #"]);
+        main_info.blockId.push(0);
+      } else if (main_info.lastBlockId == parseInt(data["block #"])) {
+        main_info.lastBlockId = parseInt(data["block #"]);
+        main_info.blockId.push(main_info.blockId[main_info.blockId.length - 1]);
+      } else if (main_info.lastBlockId != parseInt(data["block #"])) {
+        main_info.lastBlockId = parseInt(data["block #"]);
+        main_info.blockId.push(main_info.blockId[main_info.blockId.length - 1] + 1);
+      }
+      main_info.setvec.push(stimdef.setOrder[main_info.blockId[main_info.blockId.length - 1]]);
+      main_info.correctAction.push(parseInt(data["correct action #"]));
+      main_info.correctFeedback.push(parseInt(data["CorrectFB value"]));
+      main_info.setsize.push(parseInt(data["set size"]));
+      maxReward = maxReward + parseInt(data["CorrectFB value"]);
+      main_info.maxReward.push(maxReward)
+      main_info.correctProbExtra.push(data["2/1 correct FB proba"]);
+      main_info.tvec.push(main_info.tread)
+      main_info.stimvec.push(parseInt(data["image number"]) - 1)
+      uniqueID = ((1 + stimdef.setOrder[main_info.blockId[main_info.blockId.length - 1]]) * 10) + (parseInt(data[
+        "image number"]) - 1)
+      if (!unique_info.uniqueID.includes(uniqueID)) {
+        unique_info.stimvec.push(parseInt(data["image number"]) - 1)
+        unique_info.setvec.push(stimdef.setOrder[main_info.blockId[main_info.blockId.length - 1]]);
+        var probVec = ["0.2", "0.5", "0.8"]
+        unique_info.correctAction.push(parseInt(data["correct action #"]));
+        unique_info.correctProbFBresp.push(probVec.indexOf(data["2/1 correct FB proba"]));
+        unique_info.correctProbExtra.push(data["2/1 correct FB proba"]);
+        unique_info.correctFeedback.push(parseInt(data["CorrectFB value"]));
+        unique_info.tvec.push(main_info.tread)
+        unique_info.setsize.push(parseInt(data["set size"]));
+        unique_info.uniqueID.push(uniqueID)
+        unique_info.blockId.push(stimdef.setOrder[main_info.blockId[main_info.blockId.length - 1]])
+        preloadPaths.push(stimdef.pathImages + stimdef.setNames[unique_info.setvec[unique_info.setvec.length - 1]] +
+          '/' + stimdef.imageNames[unique_info.setvec[unique_info.setvec.length - 1]][unique_info.stimvec[
+          unique_info.setvec.length - 1]] + '.jpg')
+      }
+      main_info.tread = main_info.tread + 1;
+    }).then(function () {
+      for (var i = 0; i <= unique_info.tvec.length - 1; i++) {
+        randind.push(i);
+      }
+      randind = this.jsPsych.randomization.shuffle(randind);
+      //step_size = maxReward/main_info.maxReward.length;
+      rem_tnum = main_info.maxReward.length - 1;
+    })
+  }
+
+  // query the database to decide counterbalancing
+  var counterbalanced_version;
+  fetch('getNsubjectsRLWM').then(response => response.json())
+    .then(data => {
+      counterbalanced_version = (1 + (data.NsubjectsRLWM % 4))
+      loadCSV()
+      console.log('cbt version' + counterbalanced_version)
+    })
+
+
+  // create trial-wise vectors for training
+  var train_info = [];
+  train_info.tread = 0;
+  train_info.tvec = [];
+  train_info.stimvec = [];
+  train_info.setvec = [];
+  train_info.blockId = [];
+  train_info.blockId = [];
+  train_info.correctAction = [];
+  train_info.correctFeedback = [];
+  train_info.correctProbExtra = [];
+  train_info.setsize = [];
+  train_info.uniqueID = [];
+  d3.csv("./RLWM_pst/trainingblock.csv", function (data) {
+    //console.log(data)
+    //console.log(parseInt(data["block #"])
+    //if (train_info.tread == 0) {
+    train_info.blockId.push(0);
+    //} else 
+    train_info.setvec.push(12); // always the last set for training
+    train_info.correctAction.push(parseInt(data["correct action #"]));
+    train_info.correctFeedback.push(parseInt(data["CorrectFB value"]));
+    train_info.setsize.push(parseInt(data["set size"]));
+    train_info.correctProbExtra.push(data["2/1 correct FB proba"]);
+    train_info.tvec.push(train_info.tread)
+    train_info.stimvec.push(parseInt(data["image number"]) - 1)
+    train_info.tread = train_info.tread + 1;
+    uniqueID = ((1 + train_info.setvec[train_info.blockId.length - 1]) * 10) + (parseInt(data[
+      "image number"]) - 1)
+    if (!train_info.uniqueID.includes(uniqueID)) {
+      preloadPaths.push(stimdef.pathImages + stimdef.setNames[train_info.setvec[train_info.setvec.length - 1]] +
+        '/' + stimdef.imageNames[train_info.setvec[train_info.setvec.length - 1]][train_info.stimvec[
+        train_info.setvec.length - 1]] + '.jpg')
+    }
+
+  }).then(function () { })
+
+
+  // edit
+  currentSVG = expdef.pathLearningTrial;
+
+  // instruction list
+  // specific stimuli
+  var instruction_list = ["RLWM_externalHTML/welcome1.html",
+    "RLWM_externalHTML/welcome2.html",
+    "RLWM_externalHTML/before_main.html",
+    "RLWM_externalHTML/after_main.html",
+    "RLWM_externalHTML/post_test1.html",
+    "RLWM_externalHTML/post_test2.html",
+  ];
+  var instructionDelay_list = [7500, 7500, 7500, 5000, 5000, 5000];
+
+  if (TASK_ID == 'debug') {
+    var instructionDelay_list = [7500, 7500, 7500, 5000, 5000, 5000] / 1000;
+  }
+
+  /////////////////// Browser check TRIAL
+
+  var browsercheck_trial = {
+    type: jsPsychBrowserCheck,
+    inclusion_function: (data) => {
+      if ((data.mobile === false) && ((data.browser == 'chrome') || (data.browser == 'firefox') || (data.browser == 'edge') || (data.browser == 'safari'))) {
+        exclude_participant = false;
+        return true
+      } else {
+        if (TASK_ID == 'force') {
+          return true
+        } else {
+          return false
+        }
+      }
+    },
+    on_finish: function (data) {
+      mobile_session = data.mobile;
+      if (mobile_session) {
+        expdef.keyMode = 'touch'
+      }
+      jsPsych.data.addProperties({
+        basename: basename
+      });
+      jsPsych.data.get().addToLast({
+        trial_tag: 'browserinfo'
+      })
+    }
+  };
+
+
+  var preload_trial = {
+    type: jsPsychPreload,
+    images: function () {
+      return preloadPaths
+    },
+    show_progress_bar: true
+  }
+
+
+
+  ///////////// CONSENT PHASE
+  var consent_trial = {
+    type: jsPsychExternalHtml,
+    url: function () {
+      return 'RLWM_externalHTML/' + 'simple_consent_' + LANGUAGE + '.html'
+    },
+    cont_btn: 'start',
+    check_fn: function () {
+      if (document.getElementById('consent_checkbox').checked) {
+        return true;
+      } else {
+        alert(lang.alert_consent)
+      }
+    },
+    on_finish: function () {
+      jsPsych.data.get().addToLast({
+        trial_tag: 'consent' + version_name,
+      })
+      jsPsych.data.get().addToLast({
+        consent_name: basename
+      })
+    }
+  };
+
+  ///////////// ENTER/EXIT FULL SCREEN
+  var enter_fullscreen = {
+    type: jsPsychFullscreen,
+    fullscreen_mode: true,
+    message: function () {
+      return lang.fullscreen_msg
+    },
+    button_label: function () {
+      return lang.fullscreen_continue
+    },
+    on_start: function () {
+      document.body.addEventListener("wheel", e => {
+        if (e.ctrlKey)
+          e.preventDefault(); //prevent zoom
+      });
+      window.addEventListener('mousewheel', function (e) {
+        e.preventDefault();
+      }, {
+        passive: false
+      });
+      document.body.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+      });
+    },
+    on_finish: function () {
+      if (mobile_session) {
+        //screen.orientation.lock("landscape")
+      }
+    }
+  }
+
+  var exit_fullscreen = {
+    type: jsPsychFullscreen,
+    fullscreen_mode: false,
+    on_finish: function () {
+      if (mobile_session) {
+        screen.orientation.unlock()
+      }
+    }
+  }
+
+
+  ////////////////// DEMOGRAPHICS TRIAL
+
+  var gender_trial = {
+    type: jsPsychHtmlButtonResponse,
+    stimulus: function () {
+      return '<div style="width:100%; font-size:3vh; text-align:center;align-items:center"><p>' + lang
+        .gender_stimulus + '</p></div>'
+    },
+    choices: function () {
+      return lang.gender_choices
+    },
+    prompt: function () {
+      return '<div style="font-size:120%;  margin-top: 2%; text-align:right;align-items:right"><p><b>' + lang
+        .gender_continue + '</b></p><div>'
+    },
+    trial_duration: null,
+    response_ends_trial: true,
+    on_finish: function (data) {
+      jsPsych.data.get().addToLast({
+        trial_tag: 'gender'
+      })
+    },
+    button_block: 'block',
+    button_html: '<button class="jspsych-styled-longbutton">%choice%</button>'
+  }
+
+  var age_trial = {
+    type: jsPsychSurveyHtmlForm,
+    html: function () {
+      return '<p style:"font-size:100%">' + lang.age_prompt + '<br><br><input name="age" type="text" /><br></p>'
+    },
+    button_label: function () {
+      lang.age_continue
+    },
+    on_finish: function (data) {
+      jsPsych.data.get().addToLast({
+        trial_tag: 'age'
+      })
+    },
+  };
+
+  demographics_trial = {
+    timeline: [gender_trial, age_trial],
+    conditional_function: function () {
+      return get_demographics
+    }
+  }
+
+  ////////////////// COMPLEX INSTRUCTION TRIAL (with attention check)
+  var attention_correct = [1, 2, 0, -1, 1, 0];
+  var attention_checktrial_sub = {
+    type: jsPsychHtmlButtonResponse,
+    stimulus: function () {
+      return '<div style="width:100%; font-size:3vh; text-align:center;align-items:center"><p>' + lang.attn_check[
+        tnum_attn].prompt + '</p></div>'
+    },
+    choices: function () {
+      return lang.attn_check[tnum_attn].buttons
+    },
+    prompt: function () {
+      return '<div style="font-size:120%;  margin-top: 2%; text-align:right;align-items:right"><p><b>' + lang
+        .attn_check_tip + '</b></p><div>'
+    },
+    finish_timeOut: 500,
+    correct_response: function () {
+      return attention_correct[tnum_attn]
+    },
+    on_finish: function () {
+      jsPsych.data.get().addToLast({
+        trial_tag: 'attentioncheck'
+      })
+    },
+    button_html: '<button class="jspsych-styled-longbutton">%choice%</button>'
+  };
+
+  //  INSTRUCTION PHASE / with attention check
+
+  var instruction_subtrial = {
+    type: jsPsychExternalHtml,
+    url: function () {
+      return instruction_list[tnum_instr]
+    },
+    cont_key: [expdef.keyCodes[0], expdef.keyCodes[2]],
+    //cont_btn: 'start',
+    execute_script: true,
+    on_finish: function () {
+      jsPsych.data.get().addToLast({
+        trial_tag: 'instructions'
+      })
+    },
+    cont_object: ['.jspsych-back', '.jspsych-continue'], // divs triggering interaction in touch mode
+    response_device: function () {
+      return expdef.keyMode
+    }
+  };
+
+  var instruction_phase = {
+    timeline: [instruction_subtrial, attention_checktrial_sub],
+    on_timeline_start: function () { },
+    loop_function: function () {
+      if (jsPsych.data.get().last(1).values()[0].accuracy || tnum_attn == 3) {
+        tnum_attn = tnum_attn + 1;
+        tnum_instr = tnum_instr + 1;
+        return false;
+      } else {
+        return true;
+      }
+    },
+  }
+
+  ////////////////// SIMPLE INSTRUCTION TRIAL
+  var preblock_trial = {
+    type: jsPsychExternalHtml,
+    url: function () {
+      return "RLWM_externalHTML/preblock_instructions.html"
+    },
+    on_start: function () {
+      instruction_skipdelay = 1500;
+    },
+    cont_key: expdef.keyCodes,
+    //cont_btn: 'start',
+    execute_script: true,
+    cont_object: ['.jspsych-back', '.jspsych-continue'], // divs triggering interaction in touch mode
+    response_device: function () {
+      return expdef.keyMode
+    }
+  };
+
+  ////////////////// LOAD SVG "TRIAL"
+  var loadSVG_func = {
+    type: jsPsychCallFunction,
+    async: true,
+    func: function (done) {
+      var tracktime = performance.now();
+      var main_svg = undefined
+      if (!d3.select("#globalsvg").empty()) {
+        d3.select("#globalsvg").remove()
+      }
+      Promise.all([
+        mainsvg = d3.select("#jspsych-content")
+          .append("svg")
+          .attr("viewBox", "0 0 1920 1080")
+          .attr("width", "100%")
+          .attr("height", "100%")
+          .style("top", "0%")
+          .style('left', '0%')
+          .style('position', 'absolute')
+          .attr("id", "globalsvg")
+          .attr("stimpath", currentSVG),
+        d3.xml(currentSVG).then(data => {
+          mainsvg.node().append(data.documentElement)
+          d3.select(stimdef.idMain).attr('opacity', '0')
+          d3.select('#fixation').attr('opacity', '0')
+        })
+      ]).then(() => {
+        done(performance.now() - tracktime)
+      })
+    },
+  }
+
+  var loadSVG_progressbar = {
+    type: jsPsychCallFunction,
+    async: true,
+    func: function (done) {
+      var tracktime = performance.now();
+      var progsvg = undefined
+      Promise.all([
+        progsvg = d3.select("#jspsych-content")
+          .append("svg")
+          .attr("viewBox", "0 0 1920 1080")
+          .attr("width", "100%")
+          .attr("height", "100%")
+          .style("top", "0%")
+          .style('left', '0%')
+          .style('position', 'absolute')
+          .attr("id", "progress")
+          .attr("stimpath", expdef.pathProgressbar),
+        d3.xml(expdef.pathProgressbar).then(data => {
+          progsvg.node().append(data.documentElement)
+        })
+      ]).then(() => {
+        done(performance.now() - tracktime)
+        d3.select(stimdef.idProgress).attr('width', start_progress_width.toString())
+      })
+    },
+  }
+
+  ////////////////// FIXATION TRIAL
+  var fixation_trial = {
+    type: jsPsychSVGfixation,
+    fix_duration: 500,
+  };
+
+
+  ////////////////// LEARNING TRIAL
+  var learning_trial = {
+    type: jsPsychRLWMlearning,
+    update_progressbar: function () {
+      return progress_update
+    },
+    show_message: function () {
+      return show_choicemessage
+    },
+    response_device: function () {
+      return expdef.keyMode
+    },
+    correct_response: function () {
+      return cinfo.correctAction[tnum]
+    },
+    correct_feedback: function () {
+      return cinfo.correctFeedback[tnum]
+    },
+    response_timeout: 1500,
+    post_response_duration: 200,
+    feedback_duration: 800,
+    stim_setid: function () {
+      return cinfo.setvec[tnum]
+    },
+    stim_imageid: function () {
+      return cinfo.stimvec[tnum]
+    },
+    update_progressbar: function () {
+      return progress_update
+    },
+    trial_mode: "learning",
+    key_choices: expdef.keyCodes,
+    on_start: function () {
+      currentSVG = expdef.pathLearningTrial;
+      cummaxreward = main_info.maxReward[tnum] // expected cumulated reward at the end of the trial
+    },
+    base_data: function () {
+      var base_data = [];
+      base_data.blockId = cinfo.blockId[tnum];
+      base_data.setId = cinfo.setvec[tnum];
+      base_data.setSize = cinfo.setsize[tnum];
+      base_data.stimId = cinfo.stimvec[tnum];
+      return base_data
+    },
+    on_finish: function (trialdata) {
+      tnum = tnum + 1;
+      if (expdef.logConsole == true) {
+        console.log(trialdata)
+      }
+      if (trialdata.correct > 0) {
+        sumCorrect = sumCorrect + 1
+      }
+      doneFraction = tnum / cinfo.tvec.length;
+      accumulatedAccuracy = (sumCorrect / (tnum));
+      expectedAccuracy = (1 - doneFraction) * guessedAccuracy + doneFraction * accumulatedAccuracy;
+      if (progress_update == true) {
+        rem_tnum = rem_tnum - 1
+        if (trialdata.correct > 0) {
+          cumreward = cumreward + trialdata.correct_feedback;
+        }
+      }
+    },
+  }
+
+  var learning_block = {
+    timeline: [fixation_trial, learning_trial],
+    loop_function: function () {
+      if (tnum > cinfo.tvec.length - 1 || cinfo.blockId[tnum] > cinfo.blockId[tnum - 1]) {
+        return false
+      } else {
+        return true
+      }
+    },
+  }
+
+  var main_learning = {
+    timeline: [preblock_trial, loadSVG_progressbar, loadSVG_func, learning_block],
+    on_timeline_start: function () {
+      cinfo = Object.assign({}, main_info);
+      current_setsize = cinfo.setsize[tnum];
+      progress_update = true;
+    },
+    on_timeline_finish: function () {
+      start_progress_width = Number(d3.select(stimdef.idProgress).attr('width'));
+    },
+    loop_function: function () {
+      if (tnum >= cinfo.tvec.length - 1) {
+        tnum = 0; // reset for test phases
+        return false
+      } else {
+        return true
+      }
+    }
+  }
+
+  var train_learning = {
+    timeline: [loadSVG_func, learning_block],
+    on_timeline_start: function () {
+      cinfo = Object.assign({}, train_info);
+      progress_update = false;
+    },
+    loop_function: function () {
+      if (tnum >= cinfo.tvec.length - 1) {
+        tnum = 0;
+        sumCorrect = 0;
+        doneFraction = 0;
+        guessedAccuracy = 0.8;
+        expectedAccuracy = 0.8;
+        accumulatedAccuracy;
+        return false
+      } else {
+        return true
+      }
+    }
+  }
+
+  /////////////// test 1 (recall correct responses)
+  var test1_trial = Object.assign({}, learning_trial);
+  test1_trial.trial_mode = "test1";
+  var tnum_test1;
+  var bnum_test1 = 0;
+  var test1_phase = {
+    timeline: [fixation_trial, test1_trial],
+    on_timeline_start: function () {
+      if (typeof tnum_test1 === 'undefined') {
+        cinfo = Object.assign({}, unique_info);
+        tnum_test1 = 0
+        tnum = randind[0];
+        progress_update = false;
+      }
+    },
+    loop_function: function () {
+      if (bnum_test1 >= expdef.test1_repeat) {
+        tnum = 0; // reset for other test phase
+        return false
+      } else {
+        if (tnum_test1 >= cinfo.tvec.length - 1) {
+          tnum_test1 = 0;
+          bnum_test1 = bnum_test1 + 1;
+          tnum = randind[tnum_test1];
+          randind = jsPsych.randomization.shuffle(randind);
+          progress_update = false;
+        } else {
+          tnum_test1 = tnum_test1 + 1;
+          tnum = randind[tnum_test1];
+        }
+        return true
+      }
+    }
+  }
+
+  /////////////// test 2 (recall correct responses)
+  var test2_trial = Object.assign({}, learning_trial);
+  test2_trial.trial_mode = "test2";
+  test2_trial.progress_update = false;
+  var tnum_test2;
+  var bnum_test2 = 0;
+  var test2_phase = {
+    timeline: [fixation_trial, test2_trial],
+    on_timeline_start: function () {
+      if (typeof tnum_test2 === 'undefined') {
+        cinfo = Object.assign({}, unique_info);
+        unique_info.correctAction = unique_info.correctProbFBresp + 1;
+        tnum_test2 = 0;
+        tnum = randind[0];
+        randind = jsPsych.randomization.shuffle(randind);
+      }
+    },
+    loop_function: function () {
+      if (bnum_test2 >= 1) {
+        tnum = 0; // reset for other test phase
+        return false
+      } else {
+        if (tnum_test2 >= cinfo.tvec.length - 1) {
+          tnum_test2 = 0;
+          bnum_test2 = bnum_test2 + 1;
+          tnum = randind[tnum_test2];
+          randind = jsPsych.randomization.shuffle(randind);
+        } else {
+          tnum_test2 = tnum_test2 + 1;
+          tnum = randind[tnum_test2];
+        }
+        return true
+      }
+    }
+  }
+
+  var end_screen = {
+    type: jsPsychExternalHtml,
+    url: function () { return "./RLWM_html/end_screen.html" },
+    cont_key: "ALL_KEYS",
+    //cont_btn: 'start',
+    execute_script: true,
+    trial_duration: 1500,
+  };
+
+  var main_timeline = [browsercheck_trial, consent_trial, preload_trial, enter_fullscreen, instruction_phase, instruction_phase,
+    loadSVG_func, train_learning,
+    instruction_phase, loadSVG_progressbar, loadSVG_func, main_learning,
+    instruction_phase, loadSVG_func, test1_phase, instruction_phase, exit_fullscreen];
+
+
+  var script = document.createElement('script');
+  script.onload = function () {
+    //do stuff with the script
+    console.log('language loaded and timeline started')
+    jsPsych.run(main_timeline);
+  };
+
+  // script.src = 'js/languages/lang.' + langstr + '_short.js';
+  script.src = 'RLWM_js/languages/lang.' + LANGUAGE + '.js';
+  document.head.appendChild(script);
+
+</script>
+
+</html>
