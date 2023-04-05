@@ -1,4 +1,4 @@
-## CONFIGURE YOUR COMPUTER
+## HOW TO USE
 
 In order to run the experiment(s) locally, you'll need to install a few programs.
 - MongoDB community edition (should work with most versions, currently using 6x)
